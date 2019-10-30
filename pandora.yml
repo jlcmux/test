@@ -1,1 +1,146 @@
+# Environment variables MYSQL_DATABASE_PASSWORD=StrongPwd1
+# Environment variables MYSQL_ROOT_PWD=StrongPwd2
+# Required external configs pandora_console_ssl to enable ssl support
+version: '3.3'
 
+services:
+  mysql:
+    image: slab/pandorafms-mysql:v7.0NG.722.7600
+    hostname: mysql
+    volumes:
+       - db_data:/var/lib/mysql
+    restart: always
+    environment:
+      TZ: America/Argentina/Buenos_Aires
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PWD}
+      MYSQL_DATABASE: pandora
+      MYSQL_USER: pandora
+      MYSQL_PASSWORD: ${MYSQL_DATABASE_PASSWORD} 
+      MYSQL_ROOT_HOST: "%"
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+        window: 120s
+    networks:
+      net:
+        aliases:
+          - mysql
+  server:
+    image: slab/pandorafms-server:v7.0NG.722.7600
+    hostname: pandorafms-server
+    volumes:
+       - web_plugin:/var/www/html/pandora_console/attachment/plugin
+    depends_on:
+      - mysql
+    ports:
+      - "41121:41121"
+    restart: always
+    environment:
+      TZ: America/Argentina/Buenos_Aires
+      MYSQL_PORT_3306_TCP_ADDR: mysql
+      MYSQL_PORT_3306_TCP_PORT: 3306
+      PANDORA_DB_HOST: mysql
+      PANDORA_DB_USER: pandora
+      PANDORA_DB_PASSWORD: ${MYSQL_DATABASE_PASSWORD}
+      PANDORA_DB_NAME: pandora
+      PANDORA_SMTP_HOST: smtphost.mydomain.tld
+      PANDORA_SMTP_PORT: 25
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+        window: 120s
+    networks:
+      net:
+        aliases:
+          - pandorafms-server
+  cron:
+    image: slab/pandorafms-server:v7.0NG.722.7600
+    command: /run_cron.sh
+    environment:
+      TZ: America/Argentina/Buenos_Aires
+      MYSQL_PORT_3306_TCP_ADDR: mysql
+      MYSQL_PORT_3306_TCP_PORT: 3306
+      PANDORA_DB_HOST: mysql
+      PANDORA_DB_USER: pandora
+      PANDORA_DB_PASSWORD: ${MYSQL_DATABASE_PASSWORD}
+      PANDORA_DB_NAME: pandora
+      PANDORA_SMTP_HOST: smtphost.mydomain.tld
+      PANDORA_SMTP_PORT: 25
+    deploy:
+      mode: replicated
+      replicas: 0
+      restart_policy:
+        condition: none
+    networks:
+      net:
+  web:
+    image: slab/pandorafms-console:v7.0NG.722.7600
+    hostname: mon.mydomain.tld
+    volumes:
+       - web_certs:/etc/ssl/certs:ro
+       - web_plugin:/var/www/html/pandora_console/attachment/plugin
+    depends_on:
+      - mysql
+    restart: always
+    environment:
+      TZ: America/Argentina/Buenos_Aires
+      VIRTUAL_HOST: "https://mon.mydomain.tld"
+      SERVICE_PORTS: "443"
+      HEALTH_CHECK: "check ssl verify none"
+      PANDORA_DB_HOST: mysql
+      PANDORA_DB_USER: pandora
+      PANDORA_DB_PASSWORD: ${MYSQL_DATABASE_PASSWORD}
+      PANDORA_DB_NAME: pandora
+    networks:
+      net:
+        aliases:
+          - pandorafms-console
+      rproxy:
+        aliases:
+          - monitoring
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+        window: 120s
+    configs:
+      - source: pandora_console_ssl
+        target: /etc/httpd/conf.d/ssl.conf
+        uid: '0'
+        gid: '0'
+        mode: 0644
+volumes:
+    db_data:
+      driver: local
+      driver_opts:
+        type: nfs
+        o: addr=NFS_server_or_NAS,rw,intr,hard,timeo=600,wsize=32768,rsize=32768,vers=3,tcp
+        device: ":/docker/stacks/mon/db"
+    web_certs:
+      driver: local
+      driver_opts:
+        type: nfs
+        o: addr=NFS_server_or_NAS,rw,intr,hard,timeo=600,wsize=32768,rsize=32768,vers=3,tcp
+        device: ":/docker/stacks/letsencrypt/certs"
+    web_plugin:
+      driver: local
+      driver_opts:
+        type: nfs
+        o: addr=NFS_server_or_NAS,rw,intr,hard,timeo=600,wsize=32768,rsize=32768,vers=3,tcp
+        device: ":/docker/stacks/mon/plugin"
+networks:
+    net:
+    rproxy:
+        external:
+            name: reverse_proxy
+configs:
+    pandora_console_ssl:
+        external: true
